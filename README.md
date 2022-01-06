@@ -15,7 +15,7 @@ I've linked this file on Github to a shorter, more memorable address on my
 website so you can get it on your machine with this short command:
 
 ```sh
-curl -LO lukesmith.xyz/emailwiz.sh
+curl -LO gustafrydholm.xyz/emailwiz.sh
 ```
 
 When prompted by a dialog menu at the beginning, select "Internet Site", then
