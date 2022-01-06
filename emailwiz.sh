@@ -34,9 +34,10 @@
 # `mail.` before it).
 
 echo "Installing programs..."
-apt install postfix dovecot-imapd dovecot-sieve opendkim spamassassin spamc
+pacman -S postfix dovecot opendkim spamassassin pigeonhole
 # Check if OpenDKIM is installed and install it if not.
-which opendkim-genkey >/dev/null 2>&1 || apt install opendkim-tools
+which opendkim-genkey >/dev/null 2>&1 || pacman -S opendkim-tools
+[ -e /etc/mailname ] || echo "Could not find a mailname in /etc/" && exit 1
 domain="$(cat /etc/mailname)"
 subdom=${MAIL_SUBDOM:-mail}
 maildomain="$subdom.$domain"
@@ -117,7 +118,7 @@ smtps     inet  n       -       y       -       -       smtpd
   -o smtpd_tls_wrappermode=yes
   -o smtpd_sasl_auth_enable=yes
 spamassassin unix -     n       n       -       -       pipe
-  user=debian-spamd argv=/usr/bin/spamc -f -e /usr/sbin/sendmail -oi -f \${sender} \${recipient}" >> /etc/postfix/master.cf
+  user=spamd argv=/usr/bin/vendor_perl/spamc -f -e /usr/sbin/sendmail -oi -f \${sender} \${recipient}" >> /etc/postfix/master.cf
 
 
 # By default, dovecot has a bunch of configs in /etc/dovecot/conf.d/ These
@@ -126,9 +127,14 @@ spamassassin unix -     n       n       -       -       pipe
 # /etc/dovecot/dovecot.conf because it's easier to manage. You can get a backup
 # of the original in /usr/share/dovecot if you want.
 
+[ -d "/etc/dovecot" ] || mkdir /etc/dovecot
+cp /usr/share/doc/dovecot/example-config/dovecot.conf /etc/dovecot/dovecot.conf
+cp -r /usr/share/doc/dovecot/example-config/conf.d /etc/dovecot
 mv /etc/dovecot/dovecot.conf /etc/dovecot/dovecot.backup.conf
 
 echo "Creating Dovecot config..."
+
+openssl dhparam -out /etc/dovecot/dh.pem 4096
 
 echo "# Dovecot config
 # Note that in the dovecot conf, you can use:
@@ -144,7 +150,7 @@ ssl_key = <$certdir/privkey.pem
 ssl_min_protocol = TLSv1.2
 ssl_cipher_list = EECDH+ECDSA+AESGCM:EECDH+aRSA+AESGCM:EECDH+ECDSA+SHA256:EECDH+aRSA+SHA256:EECDH+ECDSA+SHA384:EECDH+ECDSA+SHA256:EECDH+aRSA+SHA384:EDH+aRSA+AESGCM:EDH+aRSA+SHA256:EDH+aRSA:EECDH:!aNULL:!eNULL:!MEDIUM:!LOW:!3DES:!MD5:!EXP:!PSK:!SRP:!DSS:!RC4:!SEED
 ssl_prefer_server_ciphers = yes
-ssl_dh = </usr/share/dovecot/dh.pem
+ssl_dh = </etc/dovecot/dh.pem
 # Plaintext login. This is safe and easy thanks to SSL.
 auth_mechanisms = plain login
 auth_username_format = %n
@@ -218,7 +224,7 @@ case "$(dovecot --version)" in
 	1|2.1*|2.2*) sed -i "/^ssl_dh/d" /etc/dovecot/dovecot.conf ;;
 esac
 
-mkdir /var/lib/dovecot/sieve/
+mkdir -p /var/lib/dovecot/sieve/
 
 echo "require [\"fileinto\", \"mailbox\"];
 if header :contains \"X-Spam-Flag\" \"YES\"
@@ -249,11 +255,11 @@ account required        pam_unix.so" >> /etc/pam.d/dovecot
 echo "Generating OpenDKIM keys..."
 mkdir -p /etc/postfix/dkim
 opendkim-genkey -D /etc/postfix/dkim/ -d "$domain" -s "$subdom"
-chgrp opendkim /etc/postfix/dkim/*
 chmod g+r /etc/postfix/dkim/*
 
 # Generate the OpenDKIM info:
 echo "Configuring OpenDKIM..."
+cp /usr/share/doc/opendkim/opendkim.conf.sample /etc/opendkim/opendkim.conf
 grep -q "$domain" /etc/postfix/dkim/keytable 2>/dev/null ||
 echo "$subdom._domainkey.$domain $domain:$subdom:/etc/postfix/dkim/$subdom.private" >> /etc/postfix/dkim/keytable
 
@@ -266,18 +272,15 @@ grep -q "127.0.0.1" /etc/postfix/dkim/trustedhosts 2>/dev/null ||
 1.2.3.4/24" >> /etc/postfix/dkim/trustedhosts
 
 # ...and source it from opendkim.conf
-grep -q "^KeyTable" /etc/opendkim.conf 2>/dev/null || echo "KeyTable file:/etc/postfix/dkim/keytable
+grep -q "^KeyTable" /etc/opendkim/opendkim.conf 2>/dev/null || echo "KeyTable file:/etc/postfix/dkim/keytable
 SigningTable refile:/etc/postfix/dkim/signingtable
-InternalHosts refile:/etc/postfix/dkim/trustedhosts" >> /etc/opendkim.conf
+InternalHosts refile:/etc/postfix/dkim/trustedhosts" >> /etc/opendkim/opendkim.conf
 
-sed -i '/^#Canonicalization/s/simple/relaxed\/simple/' /etc/opendkim.conf
-sed -i '/^#Canonicalization/s/^#//' /etc/opendkim.conf
+sed -i '/^#Canonicalization/s/simple/relaxed\/simple/' /etc/opendkim/opendkim.conf
+sed -i '/^#Canonicalization/s/^#//' /etc/opendkim/opendkim.conf
 
-sed -i '/Socket/s/^#*/#/' /etc/opendkim.conf
-grep -q "^Socket\s*inet:12301@localhost" /etc/opendkim.conf || echo "Socket inet:12301@localhost" >> /etc/opendkim.conf
-
-# OpenDKIM daemon settings, removing previously activated socket.
-sed -i "/^SOCKET/d" /etc/default/opendkim && echo "SOCKET=\"inet:12301@localhost\"" >> /etc/default/opendkim
+sed -i '/Socket/s/^#*/#/' /etc/opendkim/opendkim.conf
+grep -q "^Socket\s*inet:12301@localhost" /etc/opendkim/opendkim.conf || echo "Socket inet:12301@localhost" >> /etc/opendkim/opendkim.conf
 
 # Here we add to postconf the needed settings for working with OpenDKIM
 echo "Configuring Postfix with OpenDKIM settings..."
@@ -286,21 +289,19 @@ postconf -e "smtpd_sasl_tls_security_options = noanonymous"
 postconf -e "myhostname = $domain"
 postconf -e "milter_default_action = accept"
 postconf -e "milter_protocol = 6"
-postconf -e "smtpd_milters = inet:localhost:12301"
-postconf -e "non_smtpd_milters = inet:localhost:12301"
+postconf -e "smtpd_milters = inet:127.0.0.1:12301"
+postconf -e "non_smtpd_milters = inet:127.0.0.1:12301"
 postconf -e "mailbox_command = /usr/lib/dovecot/deliver"
 
-# A fix for "Opendkim won't start: can't open PID file?", as specified here: https://serverfault.com/a/847442
-/lib/opendkim/opendkim.service.generate
 systemctl daemon-reload
 
 for x in spamassassin opendkim dovecot postfix; do
 	printf "Restarting %s..." "$x"
-	service "$x" restart && printf " ...done\\n"
+	systemctl enable --now "$x" && printf " ...done\\n"
 done
 
 # If ufw is used, enable the mail ports.
-pgrep ufw >/dev/null && { ufw allow 993; ufw allow 465 ; ufw allow 587; ufw allow 25 ;}
+ufw status | grep -qw active && { ufw allow 993; ufw allow 465 ; ufw allow 587; ufw allow 25 ;}
 
 pval="$(tr -d "\n" </etc/postfix/dkim/$subdom.txt | sed "s/k=rsa.* \"p=/k=rsa; p=/;s/\"\s*\"//;s/\"\s*).*//" | grep -o "p=.*")"
 dkimentry="$subdom._domainkey.$domain	TXT	v=DKIM1; k=rsa; $pval"
