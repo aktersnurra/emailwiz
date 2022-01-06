@@ -1,6 +1,6 @@
 # My fork of Luke Smith's emailwiz Script for Arch Linux
 
-An edit of the shell script to work on Arch Linux instead of debian.
+An edit of the shell script to work on Arch Linux instead of Debian.
 
 # Email server setup script
 
